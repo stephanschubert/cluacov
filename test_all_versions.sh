@@ -1,6 +1,6 @@
 #!/bin/bash
 # Test cluacov across multiple Lua versions.
-# Requires hererocks: pip install hererocks
+# Requires uv: https://docs.astral.sh/uv/getting-started/installation/
 #
 # Usage: ./test_all_versions.sh [iterations]
 #   iterations: number of benchmark iterations (default: 50000)
@@ -12,16 +12,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Lua versions matching upstream CI matrix
-VERSIONS=("lua=5.1" "lua=5.2" "lua=5.3" "luajit=2.0" "luajit=2.1")
-
-# Check for hererocks
-if ! command -v hererocks &> /dev/null; then
-    echo "Error: hererocks not found. Install with: pip install hererocks"
-    exit 1
+# Skip LuaJIT on ARM64 - cluacov's bundled LuaJIT headers don't support it
+if [[ "$(uname -m)" == "arm64" ]]; then
+    VERSIONS=("lua=5.1" "lua=5.2" "lua=5.3")
+    echo "Note: Skipping LuaJIT on ARM64 (unsupported by cluacov's bundled headers)"
+else
+    VERSIONS=("lua=5.1" "lua=5.2" "lua=5.3" "luajit=2.1")
 fi
 
-# Store results
-declare -A RESULTS
+# Check for uv (modern Python package manager)
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv not found."
+    echo "Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    echo "Or visit: https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+fi
 
 for ver in "${VERSIONS[@]}"; do
     install_dir="lua_install_${ver//=/_}"
@@ -33,7 +38,7 @@ for ver in "${VERSIONS[@]}"; do
     # Install Lua version if needed
     if [ ! -d "$install_dir" ]; then
         echo "Installing $ver..."
-        hererocks "$install_dir" --$ver -r latest
+        uvx hererocks "$install_dir" --$ver -r latest
     fi
 
     # Activate environment
@@ -42,6 +47,8 @@ for ver in "${VERSIONS[@]}"; do
     # Install LuaCov from GitHub (upstream version)
     if ! lua -e "require 'luacov'" 2>/dev/null; then
         echo "Installing luacov..."
+        # Install datafile dependency directly (avoids manifest parsing issues with LuaJIT)
+        luarocks install https://luarocks.org/datafile-0.11-1.src.rock
         rm -rf /tmp/luacov_$$
         git clone --depth=1 https://github.com/keplerproject/luacov /tmp/luacov_$$
         (cd /tmp/luacov_$$ && luarocks make)
@@ -74,7 +81,7 @@ for ver in "${VERSIONS[@]}"; do
     tls=$(lua -e "local h = require 'cluacov.hook'; print(h.tls_available and 'yes' or 'no')")
     echo "TLS available: $tls"
 
-    deactivate
+    deactivate-lua
 
     echo "$ver: PASSED (TLS: $tls)"
 done
